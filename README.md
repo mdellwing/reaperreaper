@@ -35,7 +35,8 @@ Da das JSON – und damit Marker-Beschriftung und Färbung – je Reaper-Projekt
 
 **MIT License**
 
-Copyright (c) 2025 Michael Dellwing
+Copyright (c) 2025 Michael Dellwing www.vantadesign.de
+
 
 Permission is hereby granted, free of charge, to any person obtaining a copy  
 of this software and associated documentation files (the "Software"), to deal  
