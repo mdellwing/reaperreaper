@@ -1,0 +1,18 @@
+[
+  { "note": 24, "label": " (1) kick verse",  "color": "#00ff00", "reminder": "pad 1" },
+  { "note": 25, "label": " (2) snare verse",  "color": "#ff8800", "reminder": "pad 2"  },
+  { "note": 26, "label": " (3) snare verse",  "color": "#ff8800", "reminder": "pad 3" },
+  { "note": 27, "label": " (4) snare verse",  "color": "#ff8800", "reminder": "pad 4" },
+  { "note": 28, "label": " (1) snare chorus", "color": "#00aaff", "reminder": "pad 5" },
+  { "note": 29, "label": " (2) snare chorus", "color": "#00aaff", "reminder": "pad 6" },
+  { "note": 30, "label": " (3) snare chorus", "color": "#00aaff", "reminder": "pad 7" },
+  { "note": 31, "label": " (4) snare chorus", "color": "#00aaff", "reminder": "pad 8" },
+  { "note": 32, "label": " (1) kick verse",   "color": "#33cc33", "reminder": "pad 9" },
+  { "note": 33, "label": " (2) kick verse",   "color": "#33cc33", "reminder": "pad 10" },
+  { "note": 34, "label": " (3) kick verse",   "color": "#33cc33", "reminder": "pad 11" },
+  { "note": 35, "label": " (4) kick verse",   "color": "#33cc33", "reminder": "pad 12" },
+  { "note": 36, "label": " (1) kick chorus",  "color": "#cc00cc", "reminder": "pad 13" },
+  { "note": 37, "label": " (2) kick chorus",  "color": "#cc00cc", "reminder": "pad 14" },
+  { "note": 38, "label": " (3) kick chorus",  "color": "#cc00cc", "reminder": "pad 15" },
+  { "note": 39, "label": " (4) kick chorus",  "color": "#cc00cc", "reminder": "pad 16" }
+]

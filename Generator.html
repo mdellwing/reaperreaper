@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JSON Pad Editor</title>
+  <style>
+    :root{
+      --bg:#0b0d10; --card:#13161a; --muted:#8b98a5; --text:#e6edf3; --accent:#4f8cff; --ok:#2ecc71; --warn:#ffb02e; --err:#ff5d5d; --border:#1f2328;
+      --radius:14px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Inter,Arial,sans-serif;background:linear-gradient(180deg,#0b0d10,#0e1116);
+      color:var(--text);}
+    header{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;gap:14px;align-items:center;justify-content:space-between;background:#0e1116;position:sticky;top:0;z-index:5}
+    header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.2px}
+    header .hint{color:var(--muted);font-size:12px}
+
+    main{max-width:1100px;margin:18px auto;padding:0 18px 32px;}
+
+    .toolbar{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 18px}
+    button, .btn{
+      appearance:none;border:none;background:var(--card);color:var(--text);border:1px solid var(--border);
+      padding:10px 12px;border-radius:10px;cursor:pointer;transition:transform .06s ease, background .2s;
+    }
+    button:hover{background:#171b20}
+    button:active{transform:translateY(1px)}
+    .primary{background:var(--accent);border-color:#2f6fe8}
+    .primary:hover{background:#3f7ef3}
+    .ghost{background:transparent}
+
+    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;}
+
+    table{width:100%;border-collapse:separate;border-spacing:0 8px}
+    thead th{font-size:12px;color:var(--muted);font-weight:600;text-align:left;padding:0 10px}
+    tbody tr{background:#0f1318;border:1px solid var(--border)}
+    tbody tr{border-radius:12px}
+    tbody td{padding:8px 10px;vertical-align:middle}
+    tbody tr td:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px}
+    tbody tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
+    .note{font-variant-numeric:tabular-nums;color:#b9c3cf}
+
+    input[type="text"], input[type="search"], input[type="number"], input[type="url"],
+    input[type="color"], select, textarea{
+      width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:#0c1015;color:var(--text);
+      font:inherit
+    }
+    input[type="color"]{padding:0;height:36px}
+
+    .row-actions{display:flex;gap:8px;align-items:center}
+
+    .two{display:grid;grid-template-columns:160px 1fr;gap:10px}
+    @media (max-width:720px){.two{grid-template-columns:1fr}}
+
+    .stack{display:flex;gap:8px;align-items:center}
+    .stack input.hex{max-width:120px}
+    .stack select.palette{max-width:180px}
+
+    .status{font-size:12px;color:var(--muted)}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--border);background:#0c1116}
+    .swatch{width:16px;height:16px;border-radius:4px;border:1px solid #00000030;box-shadow:inset 0 0 0 1px #ffffff20}
+
+    .footer{margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+    .grow{flex:1}
+    .right{margin-left:auto}
+
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace}
+    .small{font-size:12px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>JSON Pad Editor</h1>
+      <div class="hint">Noten (note) sind fix. Label, Farbe und Reminder sind editierbar.</div>
+    </div>
+    <div class="stack">
+      <span class="pill small"><span class="swatch" id="global-swatch"></span> <span id="dirty">Keine Änderungen</span></span>
+    </div>
+  </header>
+  <main>
+
+    <div class="toolbar">
+      <button class="primary" id="exportBtn">Export JSON</button>
+      <button id="copyBtn">In Zwischenablage</button>
+      <button id="downloadBtn">Download .json</button>
+      <button class="ghost" id="importBtn">Importieren…</button>
+      <input type="file" id="fileInput" accept=".json,application/json" hidden />
+      <button class="ghost" id="resetBtn" title="lädt die zuletzt gespeicherten Daten oder Standardwerte">Zurücksetzen</button>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:90px">Note</th>
+            <th>Label</th>
+            <th style="width:340px">Farbe</th>
+            <th style="width:220px">Reminder</th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <!-- rows injected here -->
+        </tbody>
+      </table>
+    </div>
+
+    <div class="footer">
+      <div class="grow small">Tipp: Farbwahl via Picker, direkter HEX (mit/ohne #), oder Palette (1–16). Alle Eingaben synchronisieren sich automatisch.</div>
+      <div class="stack small">Speicherort: <code class="mono">localStorage</code></div>
+    </div>
+
+    <template id="rowTmpl">
+      <tr>
+        <td class="note mono"></td>
+        <td>
+          <input class="label" type="text" placeholder="Label" />
+        </td>
+        <td>
+          <div class="stack">
+            <input class="color" type="color" title="Farbpicker" />
+            <input class="hex mono" type="text" maxlength="7" placeholder="#RRGGBB" title="HEX eingeben (mit oder ohne #)" />
+            <select class="palette" title="Palette mit 16 Standardfarben">
+              <option value="">Palette…</option>
+            </select>
+          </div>
+        </td>
+        <td>
+          <input class="reminder" type="text" placeholder="Reminder" />
+        </td>
+      </tr>
+    </template>
+
+    <dialog id="exportDlg" class="card" style="max-width: min(900px, 95vw);">
+      <form method="dialog" class="two">
+        <label class="small">Exportierte JSON</label>
+        <textarea id="exportArea" rows="16" class="mono" spellcheck="false"></textarea>
+        <div></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button value="close">Schließen</button>
+        </div>
+      </form>
+    </dialog>
+
+  </main>
+
+  <script>
+    // --- Initial data (defaults) ---
+    const DEFAULT_DATA = [
+      { "note": 24, "label": " (1) kick verse",  "color": "#00ff00", "reminder": "pad 1" },
+      { "note": 25, "label": " (2) snare verse",  "color": "#ff8800", "reminder": "pad 2"  },
+      { "note": 26, "label": " (3) snare verse",  "color": "#ff8800", "reminder": "pad 3" },
+      { "note": 27, "label": " (4) snare verse",  "color": "#ff8800", "reminder": "pad 4" },
+      { "note": 28, "label": " (1) snare chorus", "color": "#00aaff", "reminder": "pad 5" },
+      { "note": 29, "label": " (2) snare chorus", "color": "#00aaff", "reminder": "pad 6" },
+      { "note": 30, "label": " (3) snare chorus", "color": "#00aaff", "reminder": "pad 7" },
+      { "note": 31, "label": " (4) snare chorus", "color": "#00aaff", "reminder": "pad 8" },
+      { "note": 32, "label": " (1) kick verse",   "color": "#33cc33", "reminder": "pad 9" },
+      { "note": 33, "label": " (2) kick verse",   "color": "#33cc33", "reminder": "pad 10" },
+      { "note": 34, "label": " (3) kick verse",   "color": "#33cc33", "reminder": "pad 11" },
+      { "note": 35, "label": " (4) kick verse",   "color": "#33cc33", "reminder": "pad 12" },
+      { "note": 36, "label": " (1) kick chorus",  "color": "#cc00cc", "reminder": "pad 13" },
+      { "note": 37, "label": " (2) kick chorus",  "color": "#cc00cc", "reminder": "pad 14" },
+      { "note": 38, "label": " (3) kick chorus",  "color": "#cc00cc", "reminder": "pad 15" },
+      { "note": 39, "label": " (4) kick chorus",  "color": "#cc00cc", "reminder": "pad 16" }
+    ];
+
+    // 16 standard colors for the dropdown palette (1..16)
+    const PALETTE = [
+      "#FF3B30","#FF9500","#FFCC00","#34C759","#00C7BE","#32ADE6","#007AFF","#5856D6",
+      "#AF52DE","#FF2D55","#A2845E","#8E8E93","#5AC8FA","#FFD60A","#30D158","#BF5AF2"
+    ];
+
+    const STORAGE_KEY = "json-pad-editor-data-v1";
+    const $ = sel => document.querySelector(sel);
+    const $$ = sel => Array.from(document.querySelectorAll(sel));
+
+    let data = load();
+    const rowsEl = document.getElementById('rows');
+
+    // Build table
+    renderTable();
+    updateDirty(false);
+
+    // Fill palette selects
+    $$('#rows select.palette').forEach(fillPalette);
+
+    // Buttons
+    document.getElementById('exportBtn').addEventListener('click', onExport);
+    document.getElementById('copyBtn').addEventListener('click', onCopy);
+    document.getElementById('downloadBtn').addEventListener('click', onDownload);
+    document.getElementById('importBtn').addEventListener('click', () => $('#fileInput').click());
+    document.getElementById('fileInput').addEventListener('change', onFileImport);
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      data = load(true); // force load (pref localStorage, else defaults)
+      renderTable();
+      updateDirty(false);
+    });
+
+    // --- Functions ---
+    function renderTable(){
+      rowsEl.innerHTML = '';
+      const tmpl = document.getElementById('rowTmpl');
+      data.forEach((row, idx) => {
+        const tr = tmpl.content.firstElementChild.cloneNode(true);
+        tr.dataset.index = idx;
+        tr.querySelector('.note').textContent = row.note;
+
+        const $label = tr.querySelector('.label');
+        const $rem = tr.querySelector('.reminder');
+        const $color = tr.querySelector('.color');
+        const $hex = tr.querySelector('.hex');
+        const $pal = tr.querySelector('.palette');
+
+        $label.value = row.label ?? '';
+        $rem.value = row.reminder ?? '';
+        $color.value = sanitizeHex(row.color ?? '#000000');
+        $hex.value = toHashHex(row.color ?? '#000000');
+
+        // listeners
+        $label.addEventListener('input', (e) => { row.label = e.target.value; persist(); });
+        $rem.addEventListener('input', (e) => { row.reminder = e.target.value; persist(); });
+
+        $color.addEventListener('input', (e) => {
+          const v = sanitizeHex(e.target.value);
+          row.color = v; $hex.value = toHashHex(v); $pal.value = matchPaletteIndex(v);
+          persist();
+        });
+
+        $hex.addEventListener('input', (e) => {
+          const raw = e.target.value.trim();
+          // accept '#rrggbb' or 'rrggbb' while typing; validate on blur
+          const maybe = normalizeHexLoose(raw);
+          if(maybe){ $color.value = maybe; $pal.value = matchPaletteIndex(maybe); row.color = maybe; persist(); }
+        });
+        $hex.addEventListener('blur', (e) => {
+          const ok = normalizeHexStrict(e.target.value);
+          if(!ok){ e.target.classList.add('bad'); e.target.value = toHashHex($color.value); }
+          else { e.target.classList.remove('bad'); e.target.value = toHashHex(ok); $color.value = ok; row.color = ok; $pal.value = matchPaletteIndex(ok); persist(); }
+        });
+
+        $pal.addEventListener('change', (e) => {
+          const idx = Number(e.target.value);
+          if(Number.isInteger(idx)){
+            const v = PALETTE[idx];
+            $color.value = v; $hex.value = toHashHex(v); row.color = v; persist();
+          }
+        });
+
+        rowsEl.appendChild(tr);
+      });
+
+      // refill palettes now that rows exist
+      $$('#rows select.palette').forEach(fillPalette);
+    }
+
+    function fillPalette(sel){
+      // clear except first
+      sel.length = 1;
+      PALETTE.forEach((hex,i)=>{
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `#${String(i+1).padStart(2,'0')} ${hex.toUpperCase()}`;
+        opt.style.background = hex; opt.style.color = '#fff';
+        sel.appendChild(opt);
+      });
+      // set current selection based on current color
+      const tr = sel.closest('tr');
+      const current = tr.querySelector('.color').value;
+      sel.value = matchPaletteIndex(current);
+    }
+
+    function matchPaletteIndex(hex){
+      const idx = PALETTE.findIndex(p => eqHex(p, hex));
+      return idx === -1 ? '' : String(idx);
+    }
+
+    function persist(){
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      updateDirty(true);
+    }
+
+    function load(force=false){
+      try{
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if(raw){ return JSON.parse(raw); }
+      }catch{ /* ignore */ }
+      if(force) save(DEFAULT_DATA);
+      return JSON.parse(JSON.stringify(DEFAULT_DATA));
+    }
+
+    function save(obj){
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+    }
+
+    function onExport(){
+      const dlg = document.getElementById('exportDlg');
+      const area = document.getElementById('exportArea');
+      area.value = JSON.stringify(data, null, 2);
+      dlg.showModal();
+      area.select();
+    }
+
+    async function onCopy(){
+      const text = JSON.stringify(data, null, 2);
+      try{ await navigator.clipboard.writeText(text); flashStatus('JSON kopiert ✓', true); }
+      catch{ flashStatus('Kopieren fehlgeschlagen', false); }
+    }
+
+    function onDownload(){
+      const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'pads.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+    }
+
+    function onFileImport(e){
+      const file = e.target.files?.[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try{
+          const obj = JSON.parse(reader.result);
+          if(!Array.isArray(obj)) throw new Error('keine Array-JSON');
+          // Validate shape minimally
+          obj.forEach(o=>{ if(typeof o.note!== 'number') throw new Error('note fehlt'); });
+          data = obj.map(o=>({ note: o.note, label: o.label??'', color: sanitizeHex(o.color??'#000000'), reminder: o.reminder??'' }));
+          save(data);
+          renderTable();
+          updateDirty(false);
+          flashStatus('Import erfolgreich ✓', true);
+        }catch(err){
+          alert('Import fehlgeschlagen: '+ err.message);
+        }
+        e.target.value = '';
+      };
+      reader.readAsText(file);
+    }
+
+    function flashStatus(text, ok){
+      const el = document.getElementById('dirty');
+      el.textContent = text;
+      el.style.color = ok ? 'var(--ok)' : 'var(--err)';
+      setTimeout(()=>{ el.textContent = 'Änderungen gespeichert'; el.style.color='var(--muted)'; }, 1500);
+    }
+
+    function updateDirty(has){
+      const sw = document.getElementById('global-swatch');
+      const first = data[0]?.color ?? '#888888';
+      sw.style.background = first;
+      const el = document.getElementById('dirty');
+      el.textContent = has ? 'Änderungen gespeichert' : 'Keine Änderungen';
+      el.style.color = 'var(--muted)';
+    }
+
+    // --- HEX helpers ---
+    function sanitizeHex(hex){
+      const strict = normalizeHexStrict(hex);
+      return strict ?? '#000000';
+    }
+    function normalizeHexStrict(v){
+      if(typeof v !== 'string') return null;
+      const m = v.trim().match(/^#?([0-9a-fA-F]{6})$/);
+      return m ? ('#'+m[1].toLowerCase()) : null;
+    }
+    function normalizeHexLoose(v){
+      if(typeof v !== 'string') return null;
+      const m = v.trim().match(/^#?([0-9a-fA-F]{0,6})$/);
+      if(!m) return null;
+      const s = m[1];
+      if(s.length === 6) return ('#'+s.toLowerCase());
+      return null; // only commit when full 6 digits present
+    }
+    function toHashHex(v){
+      const m = v.match(/^#?[0-9a-fA-F]{6}$/);
+      let s = v.startsWith('#') ? v : ('#'+v);
+      return m ? s.toLowerCase() : '#000000';
+    }
+    function eqHex(a,b){ return toHashHex(a).toLowerCase() === toHashHex(b).toLowerCase(); }
+  </script>
+</body>
+</html>
