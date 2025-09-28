@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>REAPER Markers – Smooth Live (Low Poll)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --muted:#f4f4f4; --line:#e5e5e5; }
+    html,body { height:100%; }
+    body { margin:16px; font:14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#fff; color:#222; }
+    h1 { margin:0 0 8px 0; font-size:20px; }
+    .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 12px 0; }
+    .pill { padding:6px 10px; border:1px solid var(--line); border-radius:999px; background:#fff; }
+    .status-dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; background:#aaa; vertical-align:middle; }
+    .ok { background:#2bb673; } .err { background:#d9534f; } .warn { background:#f0ad4e; }
+    .right { margin-left:auto; }
+    .small { opacity:.85; font-size:12px; }
+    .mono { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .controls input { width:7.5em; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { border:1px solid var(--line); padding:6px 8px; text-align:left; }
+    th { background:var(--muted); position:sticky; top:0; z-index:1; }
+    tbody tr:nth-child(odd) { background:#fcfcfc; }
+    .colorchip { width:14px; height:14px; border-radius:3px; border:1px solid rgba(0,0,0,.15); display:inline-block; vertical-align:middle; margin-right:6px; }
+    tr.active { outline: 2px solid #3478f6; box-shadow: inset 0 0 0 9999px rgba(52,120,246,.10); }
+  </style>
+</head>
+<body>
+  <h1>REAPER Markers (smooth, low polling)</h1>
+
+  <div class="bar">
+    <span class="pill"><span id="dot" class="status-dot"></span><span id="status">verbinden…</span></span>
+    <span class="pill small">Quelle: <span id="source">/_/TRANSPORT;MARKER</span></span>
+    <span class="pill small">Letztes Sync: <span id="ts">–</span></span>
+
+    <span class="pill controls small">Sync-Intervall:
+      <input id="syncInterval" type="number" min="200" step="100" value="1000"> ms
+    </span>
+    <span class="pill controls small">Render-Intervall:
+      <input id="renderInterval" type="number" min="16" step="16" value="100"> ms
+    </span>
+    <span class="pill controls small">Offset:
+      <input id="offset" class="mono" placeholder="01:00:00.000">
+    </span>
+
+    <label class="pill small"><input id="follow" type="checkbox" checked> Folge aktivem Marker</label>
+    <button id="jumpBtn" class="pill small" title="Scrollt zur aktiven Marker-Zeile">Jetzt hinspringen</button>
+
+    <span class="right pill small">
+      Transport (lokal): <span id="tpos" class="mono">0.000 s</span>
+      · REAPER: <span id="tstr" class="mono">--:--:--.---</span>
+    </span>
+  </div>
+
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th style="width:90px;">Typ</th>
+        <th style="width:80px;">ID</th>
+        <th>Name</th>
+        <th style="width:140px;">Pos (s)</th>
+        <th style="width:160px;">Projektzeit</th>
+        <th style="width:140px;">Farbe</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+<script>
+(() => {
+  // ---------- DOM ----------
+  const statusEl = document.getElementById('status');
+  const dotEl    = document.getElementById('dot');
+  const tsEl     = document.getElementById('ts');
+  const tposEl   = document.getElementById('tpos');
+  const tstrEl   = document.getElementById('tstr');
+  const syncIntervalEl  = document.getElementById('syncInterval');
+  const renderIntervalEl= document.getElementById('renderInterval');
+  const offsetEl        = document.getElementById('offset');
+  const followEl        = document.getElementById('follow');
+  const jumpBtn         = document.getElementById('jumpBtn');
+  const tbody           = document.querySelector('#tbl tbody');
+
+  // ---------- State ----------
+  let markers = [];        // sortiert nach pos
+  let markerHash = '';     // zum Erkennen von Änderungen
+  let playstate = 0;       // 0=stop, 1=play, etc.
+  let basePosSec = 0;      // Transportposition zum Zeitpunkt der letzten Sync
+  let baseTimeMs = 0;      // Zeitstempel (ms) der letzten Sync
+  let positionString = ''; // REAPERs formattierte Zeit
+  let lastActiveRow = null;
+
+  let syncTimer = null;
+  let renderTimer = null;
+
+  // ---------- Utils ----------
+  function setStatus(txt, cls) {
+    statusEl.textContent = txt;
+    dotEl.className = 'status-dot ' + (cls || '');
+  }
+
+  function parseOffset(inp) {
+    if (!inp) return 0;
+    inp = String(inp).trim();
+    if (/^\d+(\.\d+)?$/.test(inp)) return Number(inp); // Sekunden
+    const m = /^(\d{1,2}):([0-5]?\d):([0-5]?\d)(?:\.(\d{1,3}))?$/.exec(inp);
+    if (!m) return 0;
+    const hh = Number(m[1]), mm = Number(m[2]), ss = Number(m[3]), ms = Number(m[4]||0);
+    return hh*3600 + mm*60 + ss + ms/1000;
+  }
+  function fmtTime(sec) {
+    if (!isFinite(sec)) sec = 0;
+    const sign = sec < 0 ? "-" : "";
+    sec = Math.abs(sec);
+    const hh = Math.floor(sec/3600);
+    const mm = Math.floor((sec%3600)/60);
+    const ss = Math.floor(sec%60);
+    const ms = Math.round((sec - Math.floor(sec))*1000);
+    const pad=(n, w=2)=>String(n).padStart(w,"0");
+    return `${sign}${pad(hh)}:${pad(mm)}:${pad(ss)}.${pad(ms,3)}`;
+  }
+
+  // Farb-Utils
+  function normalizeHex(v) {
+    if (v == null) return '';
+    v = String(v).trim();
+    if (!v) return '';
+    if (/^#?[0-9a-f]{6}$/i.test(v)) return v.startsWith('#') ? v : '#' + v;
+    const m = /^0x([0-9a-f]{8})$/i.exec(v);
+    if (m) {
+      const aarrggbb = m[1];
+      const rr = aarrggbb.slice(2,4), gg = aarrggbb.slice(4,6), bb = aarrggbb.slice(6,8);
+      return '#' + rr + gg + bb;
+    }
+    if (/^\d+$/.test(v)) {
+      let n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) return '';
+      const rr = ((n >> 16) & 0xFF).toString(16).padStart(2,'0');
+      const gg = ((n >> 8 ) & 0xFF).toString(16).padStart(2,'0');
+      const bb = ((n      ) & 0xFF).toString(16).padStart(2,'0');
+      return '#' + rr + gg + bb;
+    }
+    return '';
+  }
+  function hexToRgb(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return { r: (n>>16)&255, g: (n>>8)&255, b: n&255 };
+  }
+  function rgbaFromHex(hex, alpha) {
+    const c = hexToRgb(hex);
+    if (!c) return '';
+    return `rgba(${c.r},${c.g},${c.b},${alpha})`;
+  }
+  function isDark(hex) {
+    const c = hexToRgb(hex); if (!c) return false;
+    const yiq = (c.r*299 + c.g*587 + c.b*114) / 1000;
+    return yiq < 140;
+  }
+
+  // Binärsuche: größter Marker mit pos <= t (in s)
+  function findActiveMarkerIndex(t) {
+    let lo = 0, hi = markers.length - 1, ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if ((markers[mid].pos||0) <= t) { ans = mid; lo = mid + 1; }
+      else { hi = mid - 1; }
+    }
+    return ans;
+  }
+
+  // ---------- Rendering ----------
+  function renderTableIfNeeded() {
+    const currentHash = markers.map(m => `${m.id}|${m.pos}|${m.name}|${m.color}`).join('\n');
+    if (currentHash === markerHash) return; // nichts zu tun
+    markerHash = currentHash;
+
+    const frag = document.createDocumentFragment();
+    const offsetSec = parseOffset(offsetEl.value);
+
+    tbody.innerHTML = '';
+    for (const m of markers) {
+      const tr = document.createElement('tr');
+      tr.dataset.id = m.id || '';
+      tr.dataset.pos = isFinite(m.pos) ? String(m.pos) : '0';
+
+      const hex = normalizeHex(m.color);
+      if (hex) {
+        tr.style.backgroundColor = rgbaFromHex(hex, 0.18);
+        if (isDark(hex)) tr.style.color = '#111';
+      }
+
+      const tdType = document.createElement('td'); tdType.textContent = 'Marker'; tr.appendChild(tdType);
+      const tdId   = document.createElement('td'); tdId.className='mono'; tdId.textContent = m.id; tr.appendChild(tdId);
+      const tdName = document.createElement('td'); tdName.textContent = m.name; tr.appendChild(tdName);
+      const tdPos  = document.createElement('td'); tdPos.className='mono'; tdPos.textContent = (m.pos||0).toFixed(3); tr.appendChild(tdPos);
+
+      const tdProj = document.createElement('td'); tdProj.className='mono';
+      tdProj.textContent = fmtTime((m.pos||0) + offsetSec);
+      tr.appendChild(tdProj);
+
+      const tdColor= document.createElement('td');
+      const chip = document.createElement('span'); chip.className='colorchip'; chip.style.background = hex || '#fff';
+      tdColor.appendChild(chip);
+      const code = document.createElement('span'); code.className='mono'; code.textContent = hex || '';
+      tdColor.appendChild(code);
+      tr.appendChild(tdColor);
+
+      frag.appendChild(tr);
+    }
+    tbody.appendChild(frag);
+  }
+
+  function highlightActiveAt(estPos) {
+    // Transportanzeige (lokal hochgezählt)
+    tposEl.textContent = (estPos||0).toFixed(3) + ' s';
+
+    // aktiven Marker ermitteln
+    const idx = findActiveMarkerIndex(estPos);
+    const allRows = Array.from(document.querySelectorAll('#tbl tbody tr'));
+    for (const tr of allRows) tr.classList.remove('active');
+
+    if (idx >= 0) {
+      const m = markers[idx];
+      const row = allRows.find(tr => tr.dataset.id === String(m.id) &&
+                                     Math.abs(Number(tr.dataset.pos) - m.pos) < 1e-6);
+      if (row) {
+        row.classList.add('active');
+        lastActiveRow = row;
+        if (followEl.checked) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }
+
+  // ---------- Timers ----------
+  function startTimers() {
+    stopTimers();
+
+    // Sync-Timer: REAPER 1× pro Intervall abfragen (TRANSPORT;MARKER)
+    const syncIv = Math.max(200, Number(syncIntervalEl.value) || 1000);
+    syncTimer = setInterval(syncOnce, syncIv);
+    syncOnce(); // sofort
+
+    // Render-Timer: lokale Position hochzählen & highlighten
+    const renderIv = Math.max(16, Number(renderIntervalEl.value) || 100);
+    renderTimer = setInterval(renderTick, renderIv);
+  }
+
+  function stopTimers() {
+    if (syncTimer)  { clearInterval(syncTimer);  syncTimer = null; }
+    if (renderTimer){ clearInterval(renderTimer);renderTimer = null; }
+  }
+
+  function renderTick() {
+    // geschätzte aktuelle Transportzeit (lokal)
+    const nowMs = performance.now();
+    let estPos = basePosSec;
+    if (playstate === 1 || playstate === 5) { // play/record
+      estPos += (nowMs - baseTimeMs) / 1000;
+    }
+    // Anzeige + aktiven Marker hervorheben
+    highlightActiveAt(estPos);
+  }
+
+  async function syncOnce() {
+    try {
+      const r = await fetch('/_/TRANSPORT;MARKER', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP '+r.status);
+      const text = await r.text();
+
+      // Parsen
+      const lines = text.split(/\r?\n/);
+      const newMarkers = [];
+      let newPlaystate = playstate;
+      let newPos = basePosSec;
+      let newStr = positionString;
+
+      for (const ln of lines) {
+        if (!ln) continue;
+        const parts = ln.split('\t');
+        const tag = parts[0];
+        if (tag === 'TRANSPORT') {
+          // TRANSPORT  playstate  position(sec)  repeat  position_string  …
+          newPlaystate = Number(parts[1] || 0);
+          newPos = Number(parts[2] || 0);
+          newStr = parts[4] || '';
+        } else if (tag === 'MARKER') {
+          newMarkers.push({
+            type: 'Marker',
+            name: parts[1] || '',
+            id: parts[2] || '',
+            pos: Number(parts[3] || 0),
+            color: parts[4] || ''
+          });
+        }
+      }
+      newMarkers.sort((a,b)=>(a.pos||0)-(b.pos||0));
+
+      // State übernehmen
+      markers = newMarkers;
+      playstate = newPlaystate;
+      basePosSec = isFinite(newPos) ? newPos : 0;
+      baseTimeMs = performance.now();
+      positionString = newStr;
+
+      // Kopf-Anzeige aktualisieren
+      tstrEl.textContent = positionString || fmtTime(basePosSec + parseOffset(offsetEl.value));
+      tsEl.textContent = new Date().toLocaleTimeString();
+      setStatus('verbunden', 'ok');
+
+      // Tabelle nur neu zeichnen, wenn Marker geändert
+      renderTableIfNeeded();
+
+    } catch (e) {
+      setStatus('Fehler: '+(e.message||e), 'err');
+    }
+  }
+
+  // ---------- Events ----------
+  syncIntervalEl.addEventListener('change', startTimers);
+  renderIntervalEl.addEventListener('change', startTimers);
+  offsetEl.addEventListener('change', () => {
+    // Offset ändert nur Anzeige (Projektzeit-Spalte / Kopf wenn kein position_string)
+    markerHash = ''; // force rerender to update project time column
+    renderTableIfNeeded();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { syncOnce(); } // aufwecken
+  });
+  jumpBtn.addEventListener('click', () => {
+    if (lastActiveRow) lastActiveRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  // ---------- Start ----------
+  setStatus('verbinden…', 'warn');
+  startTimers();
+})();
+</script>
+</body>
+</html>
